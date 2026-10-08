@@ -1,0 +1,8 @@
+pandas>=2.0
+pydantic>=2.7,<3
+streamlit>=1.35
+plotly>=5
+mcp>=1.0,<2
+# Optional semantic search (app falls back to keyword search if missing)
+# chromadb
+# sentence-transformers
