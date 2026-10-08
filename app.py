@@ -1,3 +1,4 @@
+
 import streamlit as st
 import pandas as pd
 import html as html_lib
@@ -6,20 +7,23 @@ from healthcare_core import (
     run_full_assessment,
     get_measurement_history,
     save_measurement,
+    patients,
+    vitals,
+    parse_bp,
 )
 
 # ------------------------------------------------------------
 # Page config (must be first Streamlit call)
 # ------------------------------------------------------------
 st.set_page_config(
-    page_title="VitalCare",
+    page_title="Smart Healthcare Assistant",
     page_icon="🩺",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
 
 # ------------------------------------------------------------
-# Theme CSS (no leading-space HTML — avoids markdown code blocks)
+# Theme CSS (compact — no 4-space indent so markdown never treats HTML as code)
 # ------------------------------------------------------------
 st.markdown(
     """
@@ -32,7 +36,6 @@ html, body, [class*="css"] {
 header { background: transparent !important; }
 .block-container { padding-top: 1.5rem; padding-bottom: 2rem; max-width: 1400px; }
 
-/* Header */
 .vc-header {
   background: #111113;
   border: 1px solid #1f1f23;
@@ -64,7 +67,6 @@ header { background: transparent !important; }
   border: 1px solid #2f2f37;
 }
 
-/* Vital cards */
 .vc-card {
   background: #161619;
   border: 1px solid #222228;
@@ -81,7 +83,6 @@ header { background: transparent !important; }
 .vc-hr { font-size: 2.1rem; font-weight: 700; color: #c084fc; line-height: 1.1; }
 .vc-card-sub { color: #9ca3af; font-size: 0.78rem; margin-top: 6px; }
 
-/* Alerts */
 .alert-card {
   background: #161619;
   border: 1px solid #222228;
@@ -94,14 +95,6 @@ header { background: transparent !important; }
 .alert-moderate { border-left: 5px solid #d97706; }
 .alert-low { border-left: 5px solid #2563eb; }
 
-/* Rec / emergency cards */
-.vc-box {
-  background: #161619;
-  border: 1px solid #222228;
-  border-radius: 14px;
-  padding: 18px;
-  margin-top: 10px;
-}
 .vc-emergency {
   background: #1c1113;
   border: 1px solid #7f1d1d;
@@ -112,7 +105,6 @@ header { background: transparent !important; }
 .emergency-title { color: #f87171; font-size: 0.95rem; font-weight: 700; }
 .emergency-sub { color: #fca5a5; font-size: 0.82rem; margin-top: 6px; }
 
-/* Inputs */
 .stTextInput input, .stNumberInput input, .stTextArea textarea {
   background: #111113 !important;
   color: #ffffff !important;
@@ -148,6 +140,15 @@ label { color: #d1d5db !important; }
   font-size: 0.85rem;
   margin-bottom: 14px;
 }
+.patient-chip {
+  background: #161619;
+  border: 1px solid #2f2f37;
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  font-size: 0.82rem;
+  color: #d1d5db;
+}
 </style>
 """,
     unsafe_allow_html=True,
@@ -167,7 +168,6 @@ def fmt(value, decimals=1, suffix=""):
 
 
 def vital_card(title: str, value: str, subtitle: str, css_class: str) -> str:
-    # Keep HTML compact (no 4-space indent) so markdown does not treat it as a code block
     return (
         f'<div class="vc-card">'
         f'<div class="vc-card-title">{title}</div>'
@@ -189,11 +189,43 @@ def severity_class(severity: str) -> str:
 
 
 def render_html(snippet: str) -> None:
-    """Prefer st.html (Streamlit >= 1.33); fall back to markdown."""
     if hasattr(st, "html"):
         st.html(snippet)
     else:
         st.markdown(snippet, unsafe_allow_html=True)
+
+
+def build_patient_options():
+    """Label → patient_id for the preset dropdown."""
+    options = {"— Manual entry (type your own values) —": None}
+    for _, row in patients.iterrows():
+        label = f"#{row['patient_id']} · {row['name']} · {row['age']}y · {row['condition']}"
+        options[label] = int(row["patient_id"])
+    return options
+
+
+def load_preset_defaults(patient_id: int) -> dict:
+    """Return form defaults from synthetic patient + vitals tables."""
+    prow = patients.loc[patients.patient_id == patient_id]
+    vrow = vitals.loc[vitals.patient_id == patient_id]
+    if prow.empty or vrow.empty:
+        return {}
+    p = prow.iloc[0]
+    v = vrow.iloc[0]
+    bp = parse_bp(v["blood_pressure"])
+    sys_bp, dia_bp = bp if bp else (120, 80)
+    return {
+        "patient_id": int(p["patient_id"]),
+        "age": int(p["age"]),
+        "heart_rate": float(v["heart_rate"]),
+        "glucose": float(v["glucose_level"]),
+        "systolic_bp": int(sys_bp),
+        "diastolic_bp": int(dia_bp),
+        "spo2": float(v["spo2"]),
+        "temperature": float(v["temperature_c"]),
+        "known_condition": str(p["condition"]),
+        "name": str(p["name"]),
+    }
 
 
 # ------------------------------------------------------------
@@ -204,13 +236,18 @@ render_html(
     '<div class="vc-header-left">'
     '<div class="vc-icon">🩺</div>'
     "<div>"
-    '<p class="vc-name">VitalCare</p>'
-    '<p class="vc-sub">Patient health dashboard</p>'
+    '<p class="vc-name">Smart Healthcare Assistant</p>'
+    '<p class="vc-sub">Educational vitals analysis · synthetic demo data</p>'
     "</div>"
     "</div>"
     '<div class="vc-badge">Demo</div>'
     "</div>"
 )
+
+# ------------------------------------------------------------
+# Build patient option map once
+# ------------------------------------------------------------
+PATIENT_OPTIONS = build_patient_options()
 
 # ------------------------------------------------------------
 # Layout
@@ -221,35 +258,118 @@ left, right = st.columns([1, 2], gap="large")
 with left:
     st.subheader("⚙️ Patient Vitals Input")
 
-    patient_id = st.number_input("Patient ID (optional)", min_value=0, value=0, step=1)
-    age = st.number_input("Age", min_value=0, max_value=120, value=33, step=1)
+    selected_label = st.selectbox(
+        "Data source",
+        options=list(PATIENT_OPTIONS.keys()),
+        help="Pick a synthetic demo patient to auto-fill vitals, or use manual entry.",
+    )
+    selected_pid = PATIENT_OPTIONS[selected_label]
+
+    def _apply_form_values(
+        *,
+        pid=0,
+        age_v=33,
+        hr=72.0,
+        glucose_v=95.0,
+        sys=120,
+        dia=80,
+        spo2_v=98.0,
+        temp=36.8,
+        condition="",
+        symptoms_v="",
+    ):
+        # Set widget keys BEFORE widgets are created (Streamlit pattern)
+        st.session_state["widget_patient_id"] = int(pid)
+        st.session_state["widget_age"] = int(age_v)
+        st.session_state["widget_hr"] = float(hr)
+        st.session_state["widget_glucose"] = float(glucose_v)
+        st.session_state["widget_sys"] = int(sys)
+        st.session_state["widget_dia"] = int(dia)
+        st.session_state["widget_spo2"] = float(spo2_v)
+        st.session_state["widget_temp"] = float(temp)
+        st.session_state["widget_condition"] = condition or ""
+        st.session_state["widget_symptoms"] = symptoms_v or ""
+
+    # First visit: seed defaults once
+    if "widget_patient_id" not in st.session_state:
+        _apply_form_values()
+
+    preset = None
+    if selected_pid is not None:
+        preset = load_preset_defaults(selected_pid)
+        if st.session_state.get("_last_preset_pid") != selected_pid:
+            st.session_state["_last_preset_pid"] = selected_pid
+            _apply_form_values(
+                pid=preset.get("patient_id", 0),
+                age_v=preset.get("age", 33),
+                hr=preset.get("heart_rate", 72.0),
+                glucose_v=preset.get("glucose", 95.0),
+                sys=preset.get("systolic_bp", 120),
+                dia=preset.get("diastolic_bp", 80),
+                spo2_v=preset.get("spo2", 98.0),
+                temp=preset.get("temperature", 36.8),
+                condition=preset.get("known_condition", ""),
+                symptoms_v="",
+            )
+        render_html(
+            f'<div class="patient-chip">'
+            f"<b>{html_lib.escape(preset.get('name', ''))}</b> · "
+            f"ID {preset.get('patient_id')} · {preset.get('age')}y<br>"
+            f"{html_lib.escape(preset.get('known_condition', ''))}"
+            f"</div>"
+        )
+    else:
+        if st.session_state.get("_last_preset_pid") is not None:
+            st.session_state["_last_preset_pid"] = None
+            _apply_form_values()
+
+    patient_id = st.number_input(
+        "Patient ID (optional)", min_value=0, step=1, key="widget_patient_id"
+    )
+    age = st.number_input(
+        "Age", min_value=0, max_value=120, step=1, key="widget_age"
+    )
 
     c1, c2 = st.columns(2)
     with c1:
-        systolic_bp = st.number_input("Systolic BP", min_value=0, max_value=260, value=120, step=1)
+        systolic_bp = st.number_input(
+            "Systolic BP", min_value=0, max_value=260, step=1, key="widget_sys"
+        )
     with c2:
-        diastolic_bp = st.number_input("Diastolic BP", min_value=0, max_value=180, value=80, step=1)
+        diastolic_bp = st.number_input(
+            "Diastolic BP", min_value=0, max_value=180, step=1, key="widget_dia"
+        )
 
     c1, c2 = st.columns(2)
     with c1:
-        heart_rate = st.number_input("Heart Rate (bpm)", min_value=0, max_value=250, value=72, step=1)
+        heart_rate = st.number_input(
+            "Heart Rate (bpm)", min_value=0.0, max_value=250.0, step=1.0, key="widget_hr"
+        )
     with c2:
-        spo2 = st.number_input("SpO₂ (%)", min_value=0, max_value=100, value=98, step=1)
+        spo2 = st.number_input(
+            "SpO₂ (%)", min_value=0.0, max_value=100.0, step=1.0, key="widget_spo2"
+        )
 
     c1, c2 = st.columns(2)
     with c1:
-        temperature = st.number_input("Temp (°C)", min_value=0.0, max_value=43.0, value=36.8, step=0.1)
+        temperature = st.number_input(
+            "Temp (°C)", min_value=0.0, max_value=43.0, step=0.1, key="widget_temp"
+        )
     with c2:
-        glucose = st.number_input("Glucose (mg/dL)", min_value=0, max_value=700, value=95, step=1)
+        glucose = st.number_input(
+            "Glucose (mg/dL)", min_value=0.0, max_value=700.0, step=1.0, key="widget_glucose"
+        )
 
-    symptoms = st.text_area("Symptoms", placeholder="Describe symptoms…", height=90)
-    known_condition = st.text_input("Known condition", value="")
+    symptoms = st.text_area(
+        "Symptoms", placeholder="Describe symptoms…", height=90, key="widget_symptoms"
+    )
+    known_condition = st.text_input("Known condition", key="widget_condition")
 
     analyze = st.button("🔍 Analyze Vitals", use_container_width=True)
 
     st.markdown(
-        '<p class="vc-footer">Enter measurements and click <b>Analyze Vitals</b>. '
-        "Educational prototype only — not a medical device.</p>",
+        '<p class="vc-footer">Select a <b>synthetic patient</b> above to auto-fill, '
+        "or type values manually. Educational prototype only — not a medical device.</p>",
         unsafe_allow_html=True,
     )
 
@@ -297,7 +417,6 @@ with right:
         status_text = str(classification.get("overall_status", "OK")).upper()
         status_label = classification.get("overall_label", "")
 
-    # Status
     st.markdown(
         f'<p class="status-line"><b style="color:#fff">System Status:</b> '
         f'<span style="color:#fb923c">{html_lib.escape(status_text)}</span> — '
@@ -305,7 +424,6 @@ with right:
         unsafe_allow_html=True,
     )
 
-    # Vital cards (2x2)
     r1c1, r1c2 = st.columns(2)
     with r1c1:
         render_html(vital_card("🩺 Blood pressure", display_bp, f"mmHg · {bp_label}", "vc-bp"))
@@ -380,6 +498,7 @@ with right:
 # Analyze action
 # ------------------------------------------------------------
 if analyze:
+    # Prefer widget values (what user currently sees)
     payload = {
         "patient_id": int(patient_id) if patient_id > 0 else None,
         "age": int(age) if age > 0 else None,
@@ -389,8 +508,8 @@ if analyze:
         "diastolic_bp": int(diastolic_bp) if diastolic_bp > 0 else None,
         "spo2": float(spo2) if spo2 > 0 else None,
         "temperature_c": float(temperature) if temperature > 0 else None,
-        "symptoms": symptoms.strip() or None,
-        "known_condition": known_condition.strip() or None,
+        "symptoms": (symptoms or "").strip() or None,
+        "known_condition": (known_condition or "").strip() or None,
     }
 
     with st.spinner("Analyzing vitals…"):
@@ -412,9 +531,46 @@ if analyze:
         st.rerun()
 
 # ------------------------------------------------------------
-# History + footer
+# Synthetic patient directory + history + footer
 # ------------------------------------------------------------
 st.divider()
+
+with st.expander("👥 Synthetic patient directory (demo data)", expanded=False):
+    st.caption(
+        "All records are fictional and only loosely realistic for demonstration. "
+        "Do not enter real personal health information."
+    )
+    # Merge patients + vitals for a clear table
+    directory = patients.merge(vitals, on="patient_id", how="left")
+    show_cols = [
+        "patient_id",
+        "name",
+        "age",
+        "condition",
+        "heart_rate",
+        "glucose_level",
+        "blood_pressure",
+        "spo2",
+        "temperature_c",
+    ]
+    st.dataframe(
+        directory[show_cols].rename(
+            columns={
+                "patient_id": "ID",
+                "name": "Name",
+                "age": "Age",
+                "condition": "Condition",
+                "heart_rate": "HR (bpm)",
+                "glucose_level": "Glucose",
+                "blood_pressure": "BP",
+                "spo2": "SpO₂ %",
+                "temperature_c": "Temp °C",
+            }
+        ),
+        use_container_width=True,
+        hide_index=True,
+    )
+
 with st.expander("📋 Measurement History"):
     try:
         history_result = get_measurement_history(limit=50)
@@ -422,13 +578,13 @@ with st.expander("📋 Measurement History"):
         if items:
             st.dataframe(pd.DataFrame(items), use_container_width=True, hide_index=True)
         else:
-            st.info("No measurement history yet.")
+            st.info("No measurement history yet. Analyze a patient to save a reading.")
     except Exception as exc:
         st.warning(f"History unavailable: {exc}")
 
 st.markdown(
     '<p style="text-align:center;color:#6b7280;font-size:0.75rem;padding:16px 0 4px 0">'
-    "VitalCare · Educational prototype · Synthetic/demo data only<br>"
+    "Smart Healthcare Assistant · Educational prototype · Synthetic/demo data only<br>"
     "This application does not diagnose, prescribe, or replace a licensed healthcare professional."
     "</p>",
     unsafe_allow_html=True,
