@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 import html as html_lib
@@ -81,6 +80,7 @@ header { background: transparent !important; }
 .vc-spo2 { font-size: 2.1rem; font-weight: 700; color: #38bdf8; line-height: 1.1; }
 .vc-temp { font-size: 2.1rem; font-weight: 700; color: #fb923c; line-height: 1.1; }
 .vc-hr { font-size: 2.1rem; font-weight: 700; color: #c084fc; line-height: 1.1; }
+.vc-glucose { font-size: 2.1rem; font-weight: 700; color: #34d399; line-height: 1.1; }
 .vc-card-sub { color: #9ca3af; font-size: 0.78rem; margin-top: 6px; }
 
 .alert-card {
@@ -376,8 +376,9 @@ with left:
 # -------------------- RIGHT: dashboard --------------------
 with right:
     if "assessment" not in st.session_state:
-        display_bp, display_spo2, display_temp, display_hr = "120/80", "98%", "36.8°C", "72 BPM"
-        bp_label = spo2_label = temp_label = hr_label = "Example"
+        display_bp, display_spo2, display_temp = "120/80", "98%", "36.8°C"
+        display_hr, display_glucose = "72 BPM", "95 mg/dL"
+        bp_label = spo2_label = temp_label = hr_label = glucose_label = "Example"
         alerts, recommendations, first_aid = [], [], {}
         status_text, status_label = "READY", "Waiting for analysis"
     else:
@@ -409,11 +410,17 @@ with right:
         display_spo2 = fmt(data.get("spo2"), 0, "%") if data.get("spo2") is not None else "—"
         display_temp = fmt(data.get("temperature_c"), 1, "°C") if data.get("temperature_c") is not None else "—"
         display_hr = fmt(data.get("heart_rate"), 0, " BPM") if data.get("heart_rate") is not None else "—"
+        display_glucose = (
+            fmt(data.get("glucose_level"), 0, " mg/dL")
+            if data.get("glucose_level") is not None
+            else "—"
+        )
 
         bp_label = classification.get("blood_pressure_label", "—")
         spo2_label = classification.get("spo2_label", "—")
         temp_label = classification.get("temperature_label", "—")
         hr_label = classification.get("heart_rate_label", "—")
+        glucose_label = classification.get("glucose_label", "—")
         status_text = str(classification.get("overall_status", "OK")).upper()
         status_label = classification.get("overall_label", "")
 
@@ -424,17 +431,19 @@ with right:
         unsafe_allow_html=True,
     )
 
-    r1c1, r1c2 = st.columns(2)
+    r1c1, r1c2, r1c3 = st.columns(3)
     with r1c1:
         render_html(vital_card("🩺 Blood pressure", display_bp, f"mmHg · {bp_label}", "vc-bp"))
     with r1c2:
         render_html(vital_card("💧 Oxygen (SpO₂)", display_spo2, spo2_label, "vc-spo2"))
+    with r1c3:
+        render_html(vital_card("🌡️ Temperature", display_temp, temp_label, "vc-temp"))
 
     r2c1, r2c2 = st.columns(2)
     with r2c1:
-        render_html(vital_card("🌡️ Temperature", display_temp, temp_label, "vc-temp"))
-    with r2c2:
         render_html(vital_card("❤️ Heart rate", display_hr, hr_label, "vc-hr"))
+    with r2c2:
+        render_html(vital_card("🩸 Glucose", display_glucose, f"{glucose_label} · mg/dL", "vc-glucose"))
 
     st.markdown(
         '<p class="vc-footer">In a real app these values would come from connected devices. '
